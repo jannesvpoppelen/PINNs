@@ -13,7 +13,7 @@ As of now (13-09-2023), the repository contains the following files, which are P
 
 On some spatiotemporal domain $\Omega \times [0,T)$, the Allen-Cahn equation is given by
 
-$$ \frac{\partial u}{\partial t} = k\nabla^2 u - \frac{1}{\varepsilon^2} u\,( u^2-1)$$
+$$ \frac{\partial u}{\partial t} = k\nabla^2 u - \frac{1}{\varepsilon^2} u( u^2-1)$$
 
 For the phase-field model in Li-ion batteries, $u$ would correspond to the phase-field $\xi$, and the Allen-Cahn equation is obtained by minimizing the free energy functional, which will be done later.
 
