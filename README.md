@@ -7,8 +7,9 @@ As of now (13-09-2023), the repository contains the following files, which are P
 - `AC_1Dexample.py` - 1D example of the Allen-Cahn equation, as provided by DeepXDE [1].
 - `Allen_Cahn.mat` - Reference data for `AC_1Dexample.py`.
 - `AC.py` - My implementation of the 2D Allen-Cahn equation, trying to recreate the results from the bc-PINN paper [2].
-- `ACJAX.py` - Not fully correct implementation of the 2D Allen-Cahn equation using JAX.
+- `ACJAX.py` - Not fully correct implementation of the 2D Allen-Cahn equation using JAX. (OUTDATED)
 - `heateq.py` - Working implementation of the heat equation using JAX.
+- `AC_1D.py` - 1D Allen-Cahn equation using sequential training and Fourier features.
 
 ## Allen-Cahn equation
 
