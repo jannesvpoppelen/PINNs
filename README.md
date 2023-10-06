@@ -12,9 +12,9 @@ As of now (13-09-2023), the repository contains the following files, which are P
 - `pinnfuncs.py` - Residual and loss functions for the PINN. 
 - `PF-Li.py` - First draft at PINN solver for phase-field model.
 
-- ~~`AC.py` - My implementation of the 2D Allen-Cahn equation, trying to recreate the results from the bc-PINN paper [2]. ~~ Removed 06-10-2023
-- ~~ `ACJAX.py` - Not fully correct implementation of the 2D Allen-Cahn equation using JAX. (OUTDATED) ~~ Removed 06-10-2023
-- ~~ `heateq.py` - Working implementation of the heat equation using JAX. ~~ Removed 06-10-2023
+- <del> `AC.py` - My implementation of the 2D Allen-Cahn equation, trying to recreate the results from the bc-PINN paper [2]. </del>  Removed 06-10-2023
+-  <del> `ACJAX.py` - Not fully correct implementation of the 2D Allen-Cahn equation using JAX. (OUTDATED) </del> Removed 06-10-2023
+-  <del> `heateq.py` - Working implementation of the heat equation using JAX. </del> Removed 06-10-2023
 
 ## Allen-Cahn equation
 
