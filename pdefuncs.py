@@ -7,37 +7,39 @@ kappa = 0.3  # Interface strength
 Mnu = 0.001  # Flux mobility
 alpha = 0.5  # Transfer coefficient
 frac = 38.69  # nF/RT
-W = 2.4  # Barrier height
+bar = 2.4  # Barrier height
 epss = -13.8  # potential difference solid phase
-epsl = 2.631  # potential difference liquid phase
+epsl = 2.631  # potential difference liquid  phase
 c0 = 1.0 / 14.89  # Initial lithium molar fraction
 dv = 5.5  # Csm/Clm
-D0 = 317.9  # Electrolyte diffusion coefficient
-sigmas = 1_000_000  # Solid phase conductivity
+D0 = 319.7  # Electrolyte diffusion coefficient
+sigmas = 1000  # 1e7  # Solid phase conductivity
 sigmal = 1.19  # Liquid phase conductivity
 fac = 0.0074  # Factor used in conductivity equation
 phie = -0.45  # Initial overpotential
 A = 1  # RT/RT
+gamma = 0.22  # Surface tension
+delta = 1  # Interrace thickness
 
 
 # Switching function
 
-def h(x):
-    return x ** 3 * (6 * x ** 2 - 15 * x + 10)
+def h(eta):
+    return eta ** 3 * (6 * eta ** 2 - 15 * eta + 10)
 
 
-def dh(x):
-    return 30 * x ** 2 * (x ** 2 - 1) ** 2
+def dh(eta):
+    return 30 * eta ** 2 * (eta ** 2 - 1) ** 2
 
 
 # Barrier function
 
-def g(x):
-    return W * x ** 2 * (1 - x) ** 2
+def g(eta):
+    return bar * eta ** 2 * (1 - eta) ** 2
 
 
-def dg(x):
-    return 2 * W * x * (1 - 3 * x + 2 * x ** 2)
+def dg(eta):
+    return 2 * bar * eta * (1 - 3 * eta + 2 * (eta * eta))
 
 
 # Concentrations
@@ -58,17 +60,22 @@ def dcsdmu(mu):
     return jnp.exp((mu + epss) / A) / (A * (jnp.exp(mu / A) + jnp.exp(epss / A)) ** 2)
 
 
+def ft(mu):
+    return cs(mu) * dv - cl(mu)
+
+
 # Susceptibility
 
 def chi(eta, mu):
     return dcldmu(mu) * (1 - h(eta)) + dcsdmu(mu) * h(eta) * dv
 
 
-# Diffusion coefficient
+# Diffusion
 
 def D(eta, mu):
-    return D0 * (1 - h(eta)) * cl(mu)(1 - h(eta))
+    return D0 * (1 - h(eta)) * cl(mu) * (1 - h(eta))
 
 
+# Conductivity
 def sigma(eta):
     return sigmas * h(eta) + sigmal * (1 - h(eta))

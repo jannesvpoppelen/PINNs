@@ -1,80 +1,76 @@
-import equinox as eqx
-import jax.random as jr
-import numpy as np
+import jax.nn
 import optax
-from pdefuncs import *
 from pinnfuncs import *
-
-key = jr.PRNGKey(0)
-stddev = 2
-t_stddev = 1
-mapping_size = 10
-eps = 1
-
-xmin = 0.  # left boundary in micrometer
-xmax = 200.  # right boundary in micrometer
-ymin = 0.  # bottom boundary in micrometer
-ymax = 100.  # top boundary in micrometer
-t0 = 0.  # initial time in s
-tf = 100.  # final time in s
-
-
-xr = 200  # number of spatial collocation points
-yr = 100  # number of spatial collocation points
-tr = 100  # number of temporal collocation points
-Nb = 500  # number of boundary points
-Nt = 1000  # number of initial condition points
-resWeight = 1
-bcWeight = 25  # weight for boundary loss
-icWeight = 100  # weight for initial condition loss
-
-xc = jnp.linspace(xmin, xmax, xr)  # collocation points
-yc = jnp.linspace(ymin, ymax, yr)  # collocation points
-tc = jnp.linspace(t0, tf, tr)  # collocation points
-xic = jr.uniform(key, minval=xmin, maxval=xmax, shape=(Nt,))  # initial condition points
-yic = jr.uniform(key, minval=ymin, maxval=ymax, shape=(Nt,))  # initial condition points
-xbc = jr.uniform(key, minval=xmin, maxval=xmax, shape=(Nb,))  # boundary points
-ybc = jr.uniform(key, minval=ymin, maxval=ymax, shape=(Nb,))  # boundary points
-tbc = jnp.linspace(t0, tf, Nb)  # boundary points
-
-
-B = stddev * jr.normal(key, shape=(mapping_size,))  # Fourier features
-Btemp = t_stddev * jr.normal(key, shape=(mapping_size,))  # Temporal Fourier features
-B = [B, Btemp]
-M = jnp.triu(jnp.ones((tr, tr)), k=1).T  # sums the weights of the residual
 
 
 class PINN(eqx.Module):
-    depth: int
-    width: int
-    layers: list
-    bias: jnp.ndarray
-    FF: jnp.ndarray
+    params: list
 
-    def __init__(self, key, depth, width, FF):
-        # super().__init__()
-        key, _ = jr.split(key)
-        self.depth = depth
-        self.width = width
-        self.bias = jr.normal(key, shape=(3,))
-        self.FF = FF
-        mapsize = 6 * len(self.FF[0].flatten()) + 1
-        key, _ = jr.split(key)
-        self.layers = [eqx.nn.Linear(mapsize, self.width, key=key)]
-
-        for i in range(self.depth - 1):
-            key, _ = jr.split(key)
-            self.layers.append(eqx.nn.Linear(self.width, self.width, key=key))
-
-        key, _ = jr.split(key)
-        self.layers.append(eqx.nn.Linear(self.width, 3, key=key))
+    def __init__(self, key, layers):
+        k1, k2, key = jr.split(key, 3)
+        U1, b1 = xavier_init(k1, layers[0], layers[1])
+        U2, b2 = xavier_init(k2, layers[0], layers[1])
+        key, *keys = jr.split(key, len(layers))
+        params = list(map(xavier_init, keys, layers[:-1], layers[1:]))
+        self.params = [params, U1, b1, U2, b2]
 
     @eqx.filter_jit
-    def __call__(self, x):
-        x = input_mapping(x, self.FF[0], self.FF[1])  # map into Fourier features
-        for layer in self.layers[:-1]:
-            x = jax.nn.tanh(layer(x))
-        return self.layers[-1](x) + self.bias
+    def __call__(self, x, y, t):
+        # Modified MLP structure
+        s = jnp.array([x, y, t])
+        # s = input_mapping(x, y, t)
+        U = jax.nn.tanh(jnp.dot(s, self.params[1]) + self.params[2])
+        V = jax.nn.tanh(jnp.dot(s, self.params[3]) + self.params[4])
+        for W, b in self.params[0][:-1]:
+            z = jnp.tanh(jnp.dot(s, W) + b)
+            s = jnp.multiply(z, U) + jnp.multiply(1 - z, V)
+        W, b = self.params[0][-1]
+        z = jnp.dot(s, W) + b
+        z = jnp.array([jax.nn.sigmoid(z[0]), -1. * jax.nn.leaky_relu(z[1]), phie * jax.nn.sigmoid(z[2])])
+        # z = output_mapping(x, z)  # Hard force boundary conditions
+        # z = ic_mapping(x, y, t, z)  # Hard force initial conditions
+        return z
 
 
-u = PINN(key, 3, 128, B)
+layers = [1 * 3 + 0 * (4 * mapping_size + 2), 256, 256, 256, 256, 3]
+u = PINN(key, layers)
+
+lr = optax.exponential_decay(1E-3, 5000, 0.9)
+optimizer = optax.adam(lr)
+opt_state = optimizer.init(eqx.filter(u, eqx.is_array))
+
+
+def loss(net):
+    loss_ic = ic_loss(net, xic, yic)
+    loss_bc = bc_loss(net, xbc, ybc, tbc)
+    Lt, W = res_weights(net, xc, yc, tc)
+    loss = jnp.mean(W * Lt) + icWeight * loss_ic + bcWeight * loss_bc
+    return loss
+
+
+def step(net, state):
+    loss_t, grad = eqx.filter_value_and_grad(loss)(net)
+    updates, new_state = optimizer.update(grad, state, net)
+    new_net = eqx.apply_updates(net, updates)
+    return new_net, new_state, loss_t
+
+
+iters = 60000
+pde_history = []
+ic_history = []
+bc_history = []
+loss_history = []
+for _ in range(iters + 1):
+    u, opt_state, netloss = step(u, opt_state)
+    if _ % 500 == 0:
+        l, w = res_weights(u, xc, yc, tc)
+        pde_history.append(jnp.mean(w * l))
+        ic_history.append(ic_loss(u, xic, yic))
+        loss_history.append(netloss)
+        bc_history.append(bc_loss(u, xbc, ybc, tbc))
+        print(f"Iteration: {_} | Total Weighted Loss: {netloss:.6f} | Residual Loss: {pde_history[-1]:.6f} "
+              f"| BC Loss : {bc_history[-1]:.6f} | IC Loss: {ic_history[-1]:.6f}")
+
+plot_dynamics(u, t0, tf, 751)
+plot_losses(loss_history, pde_history, bc_history, ic_history)
+plot_weights(u)
