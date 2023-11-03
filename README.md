@@ -6,10 +6,15 @@ As of now (13-09-2023), the repository contains the following files, which are P
 
 - `AC_1Dexample.py` - 1D example of the Allen-Cahn equation, as provided by DeepXDE [1].
 - `Allen_Cahn.mat` - Reference data for `AC_1Dexample.py`.
-- `AC.py` - My implementation of the 2D Allen-Cahn equation, trying to recreate the results from the bc-PINN paper [2].
-- `ACJAX.py` - Not fully correct implementation of the 2D Allen-Cahn equation using JAX. (OUTDATED)
-- `heateq.py` - Working implementation of the heat equation using JAX.
 - `AC_1D.py` - 1D Allen-Cahn equation using sequential training and Fourier features.
+- `AC_2D.py` - 2D Allen-Cahn equation using sequential training and Fourier features.
+- `pdefuncs.py` - Functions appearing in the system of PDEs of the phase-field model.
+- `pinnfuncs.py` - Residual and loss functions for the PINN. 
+- `PF-Li.py` - First draft at PINN solver for phase-field model.
+
+- <del> `AC.py` - My implementation of the 2D Allen-Cahn equation, trying to recreate the results from the bc-PINN paper [2]. </del>  Removed 06-10-2023
+-  <del> `ACJAX.py` - Not fully correct implementation of the 2D Allen-Cahn equation using JAX. (OUTDATED) </del> Removed 06-10-2023
+-  <del> `heateq.py` - Working implementation of the heat equation using JAX. </del> Removed 06-10-2023
 
 ## Allen-Cahn equation
 
@@ -17,7 +22,7 @@ On some spatiotemporal domain $\Omega \times [0,T)$, the Allen-Cahn equation is 
 
 $$ \frac{\partial u}{\partial t} = k\nabla^2 u - \frac{1}{\varepsilon^2} u( u^2-1)$$
 
-For the phase-field model in Li-ion batteries, $u$ would correspond to the phase-field $\xi$, and the Allen-Cahn equation is obtained by minimizing the free energy functional, which will be done later.
+For the phase-field model in Li-ion batteries, $u$ would correspond to the phase-field $\xi$, and the Allen-Cahn equation is obtained by minimizing the free energy functional.
 
 ## References
 
