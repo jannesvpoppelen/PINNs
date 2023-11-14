@@ -2,7 +2,7 @@
 
 This repository contains relevant code for my master's thesis done at the Division of Systems and Control at Uppsala University.
 
-As of now (13-09-2023), the repository contains the following files, which are PINN solvers for the Allen-Cahn equation using DeepXDE, or supplementary files:
+As of now (14-11-2023), the repository contains the following files
 
 - `pdefuncs.py` - Functions appearing in the system of PDEs of the phase-field model.
 - `pinnfuncs.py` - Residual and loss functions for the PINN. 
