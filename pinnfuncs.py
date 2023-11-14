@@ -1,9 +1,8 @@
 import jax
+import jax.random as jr
 import matplotlib.pyplot as plt
 from pdefuncs import *
-import jax.random as jr
 import equinox as eqx
-import time
 
 plt.rcParams["figure.dpi"] = 300
 plt.rcParams["savefig.dpi"] = 300
@@ -21,40 +20,43 @@ xmax = 200.  # right boundary in micrometer
 ymin = 0.  # bottom boundary in micrometer
 ymax = 100.  # top boundary in micrometer
 t0 = 0.  # initial time in s
-tf = 25.  # final time in s
-eps = 1
-icWeight = 100
-bcWeight = 50
-stddev = 2
+tf = 5.  # final time in s
+eps = 1.
+icWeight = 1000
+bcWeight = 100
+stddev = 1
 t_stddev = 1
-mapping_size = 5
+mapping_size = 2
 key = jr.PRNGKey(17349)
 B = stddev * jr.normal(key, shape=(mapping_size,))
 
 
 def gendata(xr, yr, tr, Nb, Nt, key):
-    key1, key2, key3, key4, _ = jr.split(key, 5)
-    xc = jnp.linspace(xmin, xmax, xr)  # collocation points
-    yc = jnp.linspace(ymin, ymax, yr)  # collocation points
+    key1, key2, key3, key4, key5, key6, _ = jr.split(key, 7)
+    xc = jr.permutation(key5, jnp.linspace(xmin, xmax, xr))  # collocation points
+    yc = jr.permutation(key6, jnp.linspace(ymin, ymax, yr))  # collocation points
     tc = jnp.linspace(t0, tf, tr)  # collocation points
     xic = jr.uniform(key1, minval=xmin, maxval=xmax, shape=(Nt,))  # initial condition points
-    yic = jr.uniform(key2, minval=ymin, maxval=ymax, shape=(Nt,))  # initial condition points
+    yic = jr.uniform(key2, minval=ymin, maxval=ymax, shape=(Nt // 2,))  # initial condition points
     xbc = jr.uniform(key3, minval=xmin, maxval=xmax, shape=(Nb,))  # boundary points
     ybc = jr.uniform(key4, minval=ymin, maxval=ymax, shape=(Nb,))  # boundary points
-    tbc = jnp.linspace(t0, tf, Nb)  # boundary points
+    tbc = jnp.linspace(t0, tf, 2 * tr)  # boundary points
     return xc, yc, tc, xic, yic, xbc, ybc, tbc
 
 
 key = jr.PRNGKey(234879)
-xr = 200
-yr = 200
-tr = 25
-Nb = 100
+xr = 1024
+yr = 1024
+tr = 5
+Nb = 128
 Nt = 256
 
 Mt = jnp.triu(jnp.ones((tr, tr)), k=1).T  # Sums the weights of the residual
-xc, yc, tc, xic, yic, xbc, ybc, tbc = gendata(xr, yr, tr, Nb, Nt, key)
+x_, y_, tc, xic, yic, xbc, ybc, tbc = gendata(xr, yr, tr, Nb, Nt, key)
 
+X, Y = jnp.meshgrid(jnp.linspace(xmin, xmax, 50), jnp.linspace(ymin, ymax, 25))  # Coarse mesh to evaluate residual over
+xc = X.flatten()
+yc = Y.flatten()
 
 def plot_losses(loss_history, pde_loss, bc_loss, ic_loss):
     plt.xlabel("Iteration")
@@ -129,7 +131,7 @@ def plot_weights(net):
 
 
 def input_mapping(x, y, t):
-    w = 2.0 * jnp.pi
+    w = 1 # 2.0 * jnp.pi
     # k = jnp.arange(1, mapping_size + 1)
     # x_proj = w * x * k
     # y_proj = w * y * k
@@ -162,6 +164,7 @@ def xavier_init(key, d_in, d_out):
     return W, b
 
 
+@eqx.filter_jit
 def residual(net, x, y, t):
     eta, mu, phi = net(x, y, t)
     u_x, u_y, u_t = jax.jacrev(net, argnums=0), jax.jacrev(net, argnums=1), jax.jacrev(net, argnums=2)
@@ -177,7 +180,7 @@ def residual(net, x, y, t):
     # ETA
     eta_res = eta_t - (M * (kappa * (eta_xx + eta_yy) * 0 - dg(eta))
                        - Mnu * dh(eta) * (jnp.exp(frac * phi * (1 - alpha)) - cl(mu) / c0 * (
-                        1 - h(eta) * jnp.exp(-alpha * frac * phi)))
+                    1 - h(eta) * jnp.exp(-alpha * frac * phi)))
                        )
 
     # MU
@@ -199,14 +202,15 @@ def residual(net, x, y, t):
     return abs(eta_res) + abs(mu_res) + abs(phi_res)
 
 
+@eqx.filter_jit
 def res_weights(net, x, y, t):
-    M = jnp.triu(jnp.ones((tr, tr)), k=1).T  # Sums the weights of the residual
     f = jax.vmap(jax.vmap(residual, in_axes=(None, 0, 0, None)), in_axes=(None, None, None, 0))
     Lt = jnp.mean(jnp.square(f(net, x, y, t)), axis=1)
     W = jax.lax.stop_gradient(jnp.exp(- eps * (Mt @ Lt)))
     return Lt, W
 
 
+@eqx.filter_jit
 def ic_res(net, x, y):
     # IC's according to the paper.
     N = 0.04 * jnp.sin(y)  # Promote faster dendrite formation
@@ -222,32 +226,51 @@ def ic_res(net, x, y):
     return abs(eta_res) + abs(mu_res) + abs(phi_res)
 
 
+@eqx.filter_jit
 def ic_loss(net, x, y):
     f = jax.vmap(jax.vmap(ic_res, in_axes=(None, 0, None)), in_axes=(None, None, 0))
     return jnp.mean(jnp.square(f(net, x, y)))
 
 
+@eqx.filter_jit
 def bc_res(net, x, y, t):
     leftnet = net(xmin, y, t)
     rightnet = net(xmax, y, t)
-    net_x, net_y = jax.jacrev(net, argnums=0), jax.jacrev(net, argnums=1)
-    leftnet_x = net_x(xmin, y, t)
-    botnet_y = net_y(x, ymin, t)
-    topnet_y = net_y(x, ymax, t)
+    # net_x, net_y = jax.jacrev(net, argnums=0), jax.jacrev(net, argnums=1)
+    # leftnet_x = net_x(xmin, y, t)
+    # botnet_y = net_y(x, ymin, t)
+    # topnet_y = net_y(x, ymax, t)
     etal, phil = leftnet[0], leftnet[2]
     etar, mur, phir = rightnet[0], rightnet[1], rightnet[2]
-    mul_x = leftnet_x[1]
-    etabot_y, etatop_y = botnet_y[0], topnet_y[0]
-    mubot_y, mutop_y = botnet_y[1], topnet_y[1]
-    phibot_y, phitop_y = botnet_y[2], topnet_y[2]
+    # mul_x = leftnet_x[1]
+    # etabot_y, etatop_y = botnet_y[0], topnet_y[0]
+    # mubot_y, mutop_y = botnet_y[1], topnet_y[1]
+    # phibot_y, phitop_y = botnet_y[2], topnet_y[2]
 
-    eta_res = (etal - 1) + (etar - 0) + (etabot_y - 0) + (etatop_y - 0)
-    mu_res = (mul_x - 0) + (mur - 0) + (mubot_y - 0) + (mutop_y - 0)
-    phi_res = (phil - phie) + (phir - 0) + (phibot_y - 0) + (phitop_y - 0)
+    eta_res = (etal - 1) + (etar - 0)  # + (etabot_y - 0) + (etatop_y - 0)
+    mu_res = (mur - 0)  # + (mul_x - 0) + (mubot_y - 0) + (mutop_y - 0)
+    phi_res = (phil - phie) + (phir - 0)  # + (phibot_y - 0) + (phitop_y - 0)
 
     return abs(eta_res) + abs(mu_res) + abs(phi_res)
 
 
+@eqx.filter_jit
 def bc_loss(net, x, y, t):
     f = jax.vmap(jax.vmap(bc_res, in_axes=(None, 0, 0, None)), in_axes=(None, None, None, 0))
     return jnp.mean(jnp.square(f(net, x, y, t)))
+
+
+#@eqx.filter_jit
+def loss(net, key):
+    key, key1, key2 = jr.split(key, 3)
+    # key, key1, key2, key3, key4, key5, key6 = jr.split(key, 7)
+    batchsize = 8192
+    xc2 = jr.uniform(key1, minval=xmin, maxval=xmax, shape=(batchsize,))
+    yc2 = jr.uniform(key2, minval=ymin, maxval=ymax, shape=(batchsize,))
+    plt.scatter(xc2, yc2, s=5)
+    plt.show()
+    loss_ic = ic_loss(net, xic, yic)
+    loss_bc = bc_loss(net, xbc, ybc, tbc)
+    Lt, W = res_weights(net, xc2, yc2, tc)
+    loss = jnp.mean(W * Lt) + icWeight * loss_ic + bcWeight * loss_bc
+    return loss

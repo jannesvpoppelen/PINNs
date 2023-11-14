@@ -12,7 +12,7 @@ epss = -13.8  # potential difference solid phase
 epsl = 2.631  # potential difference liquid  phase
 c0 = 1.0 / 14.89  # Initial lithium molar fraction
 dv = 5.5  # Csm/Clm
-D0 = 319.7  # Electrolyte diffusion coefficient
+D0 = 317.9  # Electrolyte diffusion coefficient
 sigmas = 1000  # 1e7  # Solid phase conductivity
 sigmal = 1.19  # Liquid phase conductivity
 fac = 0.0074  # Factor used in conductivity equation
@@ -45,19 +45,19 @@ def dg(eta):
 # Concentrations
 
 def cl(mu):
-    return jnp.exp((mu - epsl) / A) / (1 + jnp.exp((mu - epsl) / A))
+    return jnp.exp((mu - epsl)) / (1 + jnp.exp((mu - epsl)))
 
 
 def dcldmu(mu):
-    return jnp.exp((mu + epsl) / A) / (A * (jnp.exp(mu / A) + jnp.exp(epsl / A)) ** 2)
+    return jnp.exp((mu + epsl)) / ((jnp.exp(mu) + jnp.exp(epsl)) ** 2)
 
 
 def cs(mu):
-    return jnp.exp((mu - epss) / A) / (1 + jnp.exp((mu - epss) / A))
+    return jnp.exp((mu - epss)) / (1 + jnp.exp((mu - epss)))
 
 
 def dcsdmu(mu):
-    return jnp.exp((mu + epss) / A) / (A * (jnp.exp(mu / A) + jnp.exp(epss / A)) ** 2)
+    return jnp.exp((mu + epss)) / ((jnp.exp(mu) + jnp.exp(epss)) ** 2)
 
 
 def ft(mu):
