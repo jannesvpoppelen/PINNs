@@ -1,72 +1,37 @@
 from pinnfuncs import *
-import optax
-import time
 
-class PINN(eqx.Module):
-    params: list
+# hpyer-parameters
+t0 = 0.0
+tf = 2.0
+xmin, xmax = 0., 5.
+ymin, ymax = 0., 5.
+geometry = [t0, tf, xmin, xmax, ymin, ymax]
+n_t = 200
+n_x = 128
+n_y = 128
+n_ic, n_bc = 32, 32
+tol = 1.0
 
-    def __init__(self, key, layers):
-        k1, k2, key = jr.split(key, 3)
-        U1, b1 = xavier_init(k1, layers[0], layers[1])
-        U2, b2 = xavier_init(k2, layers[0], layers[1])
-        key, *keys = jr.split(key, len(layers))
-        params = list(map(xavier_init, keys, layers[:-1], layers[1:]))
-        self.params = [params, U1, b1, U2, b2]
+xic = jnp.linspace(xmin, xmax, n_ic)
+yic = jnp.linspace(ymin, ymax, n_ic)
 
-    @eqx.filter_jit
-    def __call__(self, x, y, t):
-        # Modified MLP structure
-        s = jnp.array([x, y, t])
-        # s = input_mapping(x, y, t) # Fourier features
-        U = jax.nn.tanh(jnp.dot(s, self.params[1]) + self.params[2])
-        V = jax.nn.tanh(jnp.dot(s, self.params[3]) + self.params[4])
-        for W, b in self.params[0][:-1]:
-            z = jnp.tanh(jnp.dot(s, W) + b)
-            s = jnp.multiply(z, U) + jnp.multiply(1 - z, V)
-        W, b = self.params[0][-1]
-        z = jnp.dot(s, W) + b
-        z = jnp.array([jax.nn.sigmoid(z[0]), -10. * jax.nn.sigmoid(z[1]), phie * jax.nn.sigmoid(z[2])])
-        # z = output_mapping(x, z)  # Hard force boundary conditions
-        # z = ic_mapping(x, y, t, z)  # Hard force initial conditions
-        return z
+# Initial condition
+eta0 = jnp.array([[eta0(x, y) for x in xic] for y in yic])
+mu0 = jnp.array([[mu0(x, y) for x in xic] for y in yic])
+phi0 = jnp.array([[phi0(x, y) for x in xic] for y in yic])
+u0 = jnp.array([eta0, mu0, phi0])
 
 
-layers = [1 * 3 + 0 * (4 * mapping_size + 2), 128, 128, 128,  128, 3]
-u = PINN(key, layers)
+# Network architecture
+d0 = 3#4 * M + 2
+layers = [d0, 128, 128, 128, 128, 128, 3]
 
-lr = optax.exponential_decay(1E-3, 50000, 0.9)
-optimizer = optax.adam(lr)
-opt_state = optimizer.init(eqx.filter(u, eqx.is_array))
-
-@eqx.filter_jit
-def step(net, state):
-    loss_t, grad = eqx.filter_value_and_grad(loss)(net, key)
-    updates, new_state = optimizer.update(grad, state, net)
-    new_net = eqx.apply_updates(net, updates)
-    return new_net, new_state, loss_t
-
-
-iters = 50000
-pde_history = []
-ic_history = []
-bc_history = []
-loss_history = []
-
-begin = time.time()
-for _ in range(iters + 1):
-    key, subkey = jr.split(key, 2)
-    u, opt_state, netloss = step(u, opt_state)
-    if _ % 500 == 0:
-        l, w = res_weights(u, xc, yc, tc)
-        pde_history.append(jnp.mean(w * l))
-        ic_history.append(ic_loss(u, xic, yic))
-        loss_history.append(netloss)
-        bc_history.append(bc_loss(u, xbc, ybc, tbc))
-        print(f"Iteration: {_} | Total Weighted Loss: {netloss:.6f} | Residual Loss: {pde_history[-1]:.6f} "
-              f"| BC Loss : {bc_history[-1]:.6f} | IC Loss: {ic_history[-1]:.6f}")
-
-end = time.time()
-print(f"Training time: {end - begin:.2f} seconds")
-plot_dynamics(u, t0, tf, 151)
-plot_losses(loss_history, pde_history, bc_history, ic_history)
-plot_weights(u)
+u = PINN(layers, geometry, u0, n_t, n_x, n_y, n_ic, n_bc, tol)
+u.train(1)
+#print(u.loss(u.get_params(u.opt_state)))
+#print(u.loss_bc(u.get_params(u.opt_state)))
+#print(u.loss_ic(u.get_params(u.opt_state)))
+#u.train(20000)
+#plot_weights(u)
+#plot_losses(u)
+#plot_dynamics(u, t0, tf, 300)

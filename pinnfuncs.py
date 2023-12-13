@@ -1,8 +1,11 @@
-import jax
 import jax.random as jr
-import matplotlib.pyplot as plt
+from jax.example_libraries import optimizers
+from jax.flatten_util import ravel_pytree
+import itertools
+from functools import partial
+from tqdm import trange
 from pdefuncs import *
-import equinox as eqx
+import matplotlib.pyplot as plt
 
 plt.rcParams["figure.dpi"] = 300
 plt.rcParams["savefig.dpi"] = 300
@@ -15,81 +18,30 @@ plt.rc('xtick', labelsize=4)  # fontsize of the tick labels
 plt.rc('ytick', labelsize=4)  # fontsize of the tick labels
 plt.rc('legend', fontsize=4)  # legend fontsize
 
-xmin = 0.  # left boundary in micrometer
-xmax = 200.  # right boundary in micrometer
-ymin = 0.  # bottom boundary in micrometer
-ymax = 100.  # top boundary in micrometer
-t0 = 0.  # initial time in s
-tf = 5.  # final time in s
-eps = 1.
+M = 3
+B = jr.normal(jr.PRNGKey(589), (M,))
 icWeight = 1000
-bcWeight = 100
-stddev = 1
-t_stddev = 1
-mapping_size = 2
-key = jr.PRNGKey(17349)
-B = stddev * jr.normal(key, shape=(mapping_size,))
-
-
-def gendata(xr, yr, tr, Nb, Nt, key):
-    key1, key2, key3, key4, key5, key6, _ = jr.split(key, 7)
-    xc = jr.permutation(key5, jnp.linspace(xmin, xmax, xr))  # collocation points
-    yc = jr.permutation(key6, jnp.linspace(ymin, ymax, yr))  # collocation points
-    tc = jnp.linspace(t0, tf, tr)  # collocation points
-    xic = jr.uniform(key1, minval=xmin, maxval=xmax, shape=(Nt,))  # initial condition points
-    yic = jr.uniform(key2, minval=ymin, maxval=ymax, shape=(Nt // 2,))  # initial condition points
-    xbc = jr.uniform(key3, minval=xmin, maxval=xmax, shape=(Nb,))  # boundary points
-    ybc = jr.uniform(key4, minval=ymin, maxval=ymax, shape=(Nb,))  # boundary points
-    tbc = jnp.linspace(t0, tf, 2 * tr)  # boundary points
-    return xc, yc, tc, xic, yic, xbc, ybc, tbc
-
-
-key = jr.PRNGKey(234879)
-xr = 1024
-yr = 1024
-tr = 5
-Nb = 128
-Nt = 256
-
-Mt = jnp.triu(jnp.ones((tr, tr)), k=1).T  # Sums the weights of the residual
-x_, y_, tc, xic, yic, xbc, ybc, tbc = gendata(xr, yr, tr, Nb, Nt, key)
-
-X, Y = jnp.meshgrid(jnp.linspace(xmin, xmax, 50), jnp.linspace(ymin, ymax, 25))  # Coarse mesh to evaluate residual over
-xc = X.flatten()
-yc = Y.flatten()
-
-def plot_losses(loss_history, pde_loss, bc_loss, ic_loss):
-    plt.xlabel("Iteration")
-    plt.ylabel("Loss")
-    plt.title("Loss history")
-    plt.yscale("log")
-    plt.plot(loss_history, label="Total loss")
-    plt.plot(pde_loss, label="PDE loss")
-    plt.plot(bc_loss, label="BC loss")
-    plt.plot(ic_loss, label="IC loss")
-    plt.legend(loc="upper right")
-    plt.savefig("loss.png")
-    plt.clf()
+bcWeight = 50
 
 
 def plot_vars(net, t, i):
-    xarr = jnp.linspace(xmin, xmax, 256)
-    yarr = jnp.linspace(ymin, ymax, 256)
-    f = jax.jit(lambda net, x, y: net(x, y, t))
-    u_pred = jax.vmap(jax.vmap(f, in_axes=(None, 0, None)), in_axes=(None, None, 0))(net, xarr, yarr)
-    eta = u_pred[:, :, 0].reshape(xarr.shape[0], yarr.shape[0])
-    mu = u_pred[:, :, 1].reshape(xarr.shape[0], yarr.shape[0])
-    phi = u_pred[:, :, 2].reshape(xarr.shape[0], yarr.shape[0])
+    # Evaluate the network over the grid
+    params = net.get_params(net.opt_state)
+    upred = net.vis_net(params, t)
+    eta = upred[:, :, 0]
+    mu = upred[:, :, 1]
+    phi = upred[:, :, 2]
 
     # Create a figure with 3 subplots arranged vertically and more vertical spacing
     fig, axs = plt.subplots(3, 1, figsize=(3, 4), sharex=False, gridspec_kw={'hspace': 0.8})
-    plt.setp(axs, xticks=[0, 50, 100, 150, 200], yticks=[0, 50, 100])
+    plt.setp(axs, xticks=[0, 2.5, 5], yticks=[0, 2.5, 5])
 
     # Plot eta
     axs[0].set_xlabel("x")
     axs[0].set_ylabel("y")
     axs[0].set_title(f" η(t = {t:.2f})")
-    im = axs[0].imshow(eta, interpolation='nearest', cmap='jet', extent=[xmin, xmax, ymin, ymax])
+    im = axs[0].imshow(eta, interpolation='nearest', cmap='jet', extent=[net.xmin, net.xmax, net.ymin, net.ymax],
+                       vmin=0, vmax=1)
     cax = fig.add_axes([axs[0].get_position().x1 + 0.025, axs[0].get_position().y0, 0.02, axs[0].get_position().height])
     plt.colorbar(im, cax=cax)
 
@@ -97,7 +49,8 @@ def plot_vars(net, t, i):
     axs[1].set_xlabel("x")
     axs[1].set_ylabel("y")
     axs[1].set_title(f"μ(t = {t:.2f})")
-    im = axs[1].imshow(mu, interpolation='nearest', cmap='jet', extent=[xmin, xmax, ymin, ymax])
+    im = axs[1].imshow(mu, interpolation='nearest', cmap='jet', extent=[net.xmin, net.xmax, net.ymin, net.ymax],
+                       vmin=-10, vmax=0)
     cax = fig.add_axes([axs[1].get_position().x1 + 0.025, axs[1].get_position().y0, 0.02, axs[1].get_position().height])
     plt.colorbar(im, cax=cax)
 
@@ -105,7 +58,8 @@ def plot_vars(net, t, i):
     axs[2].set_xlabel("x")
     axs[2].set_ylabel("y")
     axs[2].set_title(f"ϕ(t = {t:.2f})")
-    im = axs[2].imshow(phi, interpolation='nearest', cmap='jet', extent=[xmin, xmax, ymin, ymax])
+    im = axs[2].imshow(phi, interpolation='nearest', cmap='jet', extent=[net.xmin, net.xmax, net.ymin, net.ymax],
+                       vmin=phie, vmax=0)
     cax = fig.add_axes([axs[2].get_position().x1 + 0.025, axs[2].get_position().y0, 0.02, axs[2].get_position().height])
     plt.colorbar(im, cax=cax)
 
@@ -115,162 +69,287 @@ def plot_vars(net, t, i):
     return None
 
 
-def plot_dynamics(net, t0, tf, N):
-    for (t, i) in enumerate(jnp.linspace(t0, tf, N)):
+def plot_dynamics(net, t0, tf, frames):
+    for (t, i) in enumerate(jnp.linspace(t0, tf, frames)):
         plot_vars(net, i, t)
     return None
 
 
+def plot_losses(net):
+    plt.xlabel("Iteration")
+    plt.ylabel("Loss")
+    plt.title("Loss history")
+    plt.yscale("log")
+    plt.plot(net.loss_log, label="Total loss")
+    plt.plot(net.loss_res_log, label="PDE loss")
+    plt.plot(net.loss_bcs_log, label="BC loss")
+    plt.plot(net.loss_ics_log, label="IC loss")
+    plt.legend(loc="upper right")
+    plt.savefig("loss.png")
+    plt.clf()
+
+
 def plot_weights(net):
-    _, W = res_weights(net, xc, yc, tc)
+    _, W = net.residuals_and_weights(net.get_params(net.opt_state), net.tol)
+    nums = jnp.linspace(1, len(W), len(W))
     plt.xlabel("Weight #")
     plt.ylabel("Weight")
-    plt.plot(W)
+    plt.plot(nums, W)
     plt.savefig("weights.png")
     plt.clf()
 
 
-def input_mapping(x, y, t):
-    w = 1 # 2.0 * jnp.pi
-    # k = jnp.arange(1, mapping_size + 1)
-    # x_proj = w * x * k
-    # y_proj = w * y * k
-    x_proj = w * x * B.T
-    y_proj = w * y * B.T
-    out = jnp.hstack([t, 1, jnp.cos(x_proj), jnp.sin(x_proj), jnp.cos(y_proj), jnp.sin(y_proj)])
-    return out
+def MLP(layers):
+    def input_mapping(t, x, y):
+        out = jnp.hstack([t, 1,
+                          jnp.cos(x * B.T), jnp.sin(x * B.T), jnp.cos(y * B.T), jnp.sin(y * B.T)])
+        return out
+
+    def init(key):
+        def xavier_init(rngkey, d_in, d_out):
+            rngkey, _ = jr.split(rngkey)
+            glorot_stddev = 1.0 / jnp.sqrt((d_in + d_out) / 2.)
+            W = glorot_stddev * jr.normal(k1, (d_in, d_out))
+            b = jnp.zeros(d_out)
+            return W, b
+
+        k1, k2, key = jr.split(key, 3)
+        U1, b1 = xavier_init(k1, layers[0], layers[1])
+        U2, b2 = xavier_init(k2, layers[0], layers[1])
+
+        key, *keys = jr.split(key, len(layers))
+        params = list(map(xavier_init, keys, layers[:-1], layers[1:]))
+        return [params, U1, b1, U2, b2]
+
+    def apply(params, inputs):
+        t = inputs[0]
+        x = inputs[1]
+        y = inputs[2]
+        #s = input_mapping(t, x, y)
+        s = jnp.array([t, x, y])
+        U = jnp.tanh(jnp.dot(s, params[1]) + params[2])
+        V = jnp.tanh(jnp.dot(s, params[3]) + params[4])
+        for W, b in params[0][:-1]:
+            z = jnp.dot(s, W) + b
+            s = jnp.multiply(jnp.tanh(z), U) + jnp.multiply(1 - jnp.tanh(z), V)
+        W, b = params[0][-1]
+        z = jnp.dot(s, W) + b
+        #z = jnp.array([jax.nn.sigmoid(z[0]), -10*jax.nn.tanh(z[1]), phie * jax.nn.sigmoid(z[2])])
+        z = jnp.array([eta0(x, y) + t * z[0], mu0(x, y) + t * z[1], phi0(x, y) + t * z[2]]) # Hard IC
+        z = jnp.array([jax.nn.sigmoid(z[0]), -10*jax.nn.sigmoid(z[1]), phie * jax.nn.sigmoid(z[2])])
+        return z
+
+    return init, apply
 
 
-def output_mapping(x, z):
-    eta, mu, phi = z[0], z[1], z[2]
-    return jnp.array(
-        [x * (xmax - x) * eta + (1 - x / xmax), (xmax - x) * mu, x * (xmax - x) * phi + phie * (1 - x / xmax)])
+class PINN:
+    def __init__(self, layers, geometry, u0, n_t, n_x, n_y, n_ic, n_bc, tol):
+        # collocation
+        key = jr.PRNGKey(1234)
+        key1 = jr.PRNGKey(5678)
+        key2 = jr.PRNGKey(9101112)
+        self.current_count = 0
+        self.key = key1
+        self.key2 = key2
+        self.t0 = geometry[0]
+        self.tf = geometry[1]
+        self.xmin, self.xmax = geometry[2], geometry[3]
+        self.ymin, self.ymax = geometry[4], geometry[5]
+        self.tr = jnp.linspace(self.t0, self.tf, n_t)
+        self.xr = jr.uniform(self.key, minval=self.xmin, maxval=self.xmax, shape=(n_x,))
+        self.yr = jr.uniform(self.key2, minval=self.ymin, maxval=self.ymax, shape=(n_y,))
+        self.xic = jnp.linspace(self.xmin, self.xmax, n_ic)
+        self.yic = jnp.linspace(self.ymin, self.ymax, n_ic)
+        self.n_t = n_t
+        self.n_x = n_x
+        self.n_y = n_y
+        self.xc = jnp.linspace(self.xmin, self.xmax, 512)
+        self.yc = jnp.linspace(self.ymin, self.ymax, 512)
 
+        # For computing the temporal weights
+        self.Mt = jnp.triu(jnp.ones((n_t, n_t)), k=1).T
+        self.tol = tol
 
-def ic_mapping(x, y, t, z):
-    N = 0.04 * jnp.sin(y)
-    eta, mu, phi = z[0], z[1], z[2]
-    eta0 = 0.5 * (1 - jnp.tanh(2 * (x - 20 + N)))
-    mu0 = - 10 * (x < 20)
-    phi0 = 0.5 * phie * (1 - jnp.tanh(2 * (x - 20 + N)))
-    return jnp.array([t * eta + eta0, t * mu + mu0, t * phi + phi0])
+        # IC
+        self.u0 = u0
 
+        # BC
+        self.tbc = jnp.linspace(self.t0, self.tf, int(n_bc / 2))
+        self.xbc = jnp.linspace(self.xmin, self.xmax, n_bc)
+        self.ybc = jnp.linspace(self.ymin, self.ymax, n_bc)
 
-def xavier_init(key, d_in, d_out):
-    k1, k2 = jr.split(key)
-    glorot_stddev = 1.0 / jnp.sqrt((d_in + d_out) / 2.)
-    W = glorot_stddev * jr.normal(k1, (d_in, d_out))
-    b = jnp.zeros(d_out)
-    return W, b
+        # Initalize the network
+        self.init, self.apply = MLP(layers)
+        params = self.init(key=key)
+        _, self.unravel = ravel_pytree(params)
 
+        # Use optimizers to set optimizer initialization and update functions
+        lr = optimizers.exponential_decay(1e-3, decay_steps=25000, decay_rate=0.9)
+        self.opt_init, self.opt_update, self.get_params = optimizers.adam(lr)
+        self.opt_state = self.opt_init(params)
 
-@eqx.filter_jit
-def residual(net, x, y, t):
-    eta, mu, phi = net(x, y, t)
-    u_x, u_y, u_t = jax.jacrev(net, argnums=0), jax.jacrev(net, argnums=1), jax.jacrev(net, argnums=2)
-    u_xx, u_yy = jax.jacfwd(u_x, argnums=0), jax.jacfwd(u_y, argnums=1)
+        # Evaluate the network and the residual over the grid
+        self.u_func = jax.vmap(jax.vmap(self.neural_net, (None, 0, None, None)), (None, None, 0, 0))
+        self.uy_func = jax.vmap(jax.vmap(jax.jacfwd(self.neural_net, argnums=3), (None, 0, None, None)),
+                                (None, None, 0, 0))
+        self.res_func = jax.vmap(jax.vmap(self.residual_net, (None, None, 0, 0)), (None, 0, None, None))
+        self.ic_func = jax.vmap(jax.vmap(self.neural_net, (None, None, 0, None)), in_axes=(None, None, None, 0))
+        self.plot_func = jax.vmap(jax.vmap(self.neural_net, (None, None, 0, None)), (None, None, None, 0))
 
-    eta_x, eta_y, eta_t = u_x(x, y, t)[0], u_y(x, y, t)[0], u_t(x, y, t)[0]
-    mu_x, mu_y, mu_t = u_x(x, y, t)[1], u_y(x, y, t)[1], u_t(x, y, t)[1]
-    phi_x, phi_y = u_x(x, y, t)[2], u_y(x, y, t)[2]
-    eta_xx, eta_yy = u_xx(x, y, t)[0], u_yy(x, y, t)[0]
-    mu_xx, mu_yy = u_xx(x, y, t)[1], u_yy(x, y, t)[1]
-    phi_xx, phi_yy = u_xx(x, y, t)[2], u_yy(x, y, t)[2]
+        # Logger
+        self.itercount = itertools.count()
 
-    # ETA
-    eta_res = eta_t - (M * (kappa * (eta_xx + eta_yy) * 0 - dg(eta))
-                       - Mnu * dh(eta) * (jnp.exp(frac * phi * (1 - alpha)) - cl(mu) / c0 * (
-                    1 - h(eta) * jnp.exp(-alpha * frac * phi)))
-                       )
+        self.loss_log = []
+        self.loss_ics_log = []
+        self.loss_bcs_log = []
+        self.loss_res_log = []
 
-    # MU
-    dD = jax.grad(D, argnums=(0, 1))(eta, mu)
-    gradD = jnp.array([dD[0] * eta_x + dD[1] * mu_x, dD[0] * eta_y + dD[1] * mu_y])
-    gradmuphi = jnp.array([mu_x + frac * phi_x, mu_y + frac * phi_y])
+    @partial(jax.jit, static_argnums=(0,))
+    def __call__(self, t, x, y):
+        return self.neural_net(self.get_params(self.opt_state), t, x, y)
 
-    mu_res = chi(eta, mu) * mu_t - (
-            D(eta, mu) * ((mu_xx + mu_yy) + frac * (phi_xx + phi_yy))
-            + jnp.dot(gradD, gradmuphi)
-            - ft(mu) * dh(eta) * eta_t
-    )
+    @partial(jax.jit, static_argnums=(0,))
+    def neural_net(self, params, t, x, y):
+        z = jnp.stack([t, x, y])
+        outputs = self.apply(params, z)
+        return outputs
 
-    # PHI
-    dsigma = (sigmas - sigmal) * dh(eta) * jnp.array([eta_x, eta_y])
-    gradphi = jnp.array([phi_x, phi_y])
-    phi_res = (jnp.dot(dsigma, gradphi) + sigma(eta) * (phi_xx + phi_yy)) - fac * eta_t
+    @partial(jax.jit, static_argnums=(0,))
+    def residual_net(self, params, t, x, y):
+        u = self.neural_net(params, t, x, y)
+        u_t = jax.jacfwd(self.neural_net, argnums=1)(params, t, x, y)
+        u_x = jax.jacfwd(self.neural_net, argnums=2)(params, t, x, y)
+        u_y = jax.jacfwd(self.neural_net, argnums=3)(params, t, x, y)
+        u_xx = jax.jacfwd(jax.jacfwd(self.neural_net, argnums=2), argnums=2)(params, t, x, y)
+        u_yy = jax.jacfwd(jax.jacfwd(self.neural_net, argnums=3), argnums=3)(params, t, x, y)
 
-    return abs(eta_res) + abs(mu_res) + abs(phi_res)
+        eta, mu, phi = u[0], u[1], u[2]
+        eta_t, eta_x, eta_y = u_t[0], u_x[0], u_y[0]
+        eta_xx, eta_yy = u_xx[0], u_yy[0]
 
+        mu_t, mu_x, mu_y = u_t[1], u_xx[1], u_yy[1]
+        mu_xx, mu_yy = u_xx[1], u_yy[1]
 
-@eqx.filter_jit
-def res_weights(net, x, y, t):
-    f = jax.vmap(jax.vmap(residual, in_axes=(None, 0, 0, None)), in_axes=(None, None, None, 0))
-    Lt = jnp.mean(jnp.square(f(net, x, y, t)), axis=1)
-    W = jax.lax.stop_gradient(jnp.exp(- eps * (Mt @ Lt)))
-    return Lt, W
+        phi_x, phi_y = u_x[2], u_y[2]
+        phi_xx, phi_yy = u_xx[2], u_yy[2]
 
+        # ETA
+        eta_res = eta_t - (M * (kappa * (eta_xx + eta_yy) - dg(eta))
+                           - Mnu * dh(eta) * (
+                                   jnp.exp((1 - alpha) * frac * phi) - 1 / c0 * cl(mu) * (1 - h(eta)) * jnp.exp(
+                               - alpha * frac * phi)))
 
-@eqx.filter_jit
-def ic_res(net, x, y):
-    # IC's according to the paper.
-    N = 0.04 * jnp.sin(y)  # Promote faster dendrite formation
-    eta, mu, phi = net(x, y, 0.)
-    eta0 = (0.5 * (1 - jnp.tanh(2 * (x - 20 + N))))
-    mu0 = (-10 * (x < 20))
-    phi0 = (phie / 2 * (1 - jnp.tanh(2 * (x - 20 + N))))
+        # MU
+        gradmuphi = jnp.array([mu_x + frac * phi_x, mu_y + frac * phi_y])
+        DD = D0 * dcldmu(mu) * jnp.array([mu_x, mu_y])
 
-    eta_res = eta - eta0
-    mu_res = mu - mu0
-    phi_res = phi - phi0
+        mu_res = chi(eta, mu) * mu_t - (D(eta, mu) * ((mu_xx + mu_yy) + frac * (phi_xx + phi_yy))
+                                        + jnp.dot(DD, gradmuphi)
+                                        - ft(mu) * dh(eta) * eta_t)
 
-    return abs(eta_res) + abs(mu_res) + abs(phi_res)
+        # PHI
+        dsigma = (sigmas - sigmal) * dh(eta) * jnp.array([eta_x, eta_y])
+        gradphi = jnp.array([phi_x, phi_y])
+        phi_res = (jnp.dot(dsigma, gradphi) + sigma(eta) * (phi_xx + phi_yy)) - fac * eta_t
 
+        return 1*abs(eta_res) + 1*abs(mu_res) + 1*abs(phi_res)
 
-@eqx.filter_jit
-def ic_loss(net, x, y):
-    f = jax.vmap(jax.vmap(ic_res, in_axes=(None, 0, None)), in_axes=(None, None, 0))
-    return jnp.mean(jnp.square(f(net, x, y)))
+    @partial(jax.jit, static_argnums=(0,))
+    def ic_net(self, params, x, y):
+        u = self.ic_func(params, 0., x, y)
+        return u
 
+    @partial(jax.jit, static_argnums=(0,))
+    def vis_net(self, params, t):
+        u = self.plot_func(params, t, self.xc, self.yc)
+        return u
 
-@eqx.filter_jit
-def bc_res(net, x, y, t):
-    leftnet = net(xmin, y, t)
-    rightnet = net(xmax, y, t)
-    # net_x, net_y = jax.jacrev(net, argnums=0), jax.jacrev(net, argnums=1)
-    # leftnet_x = net_x(xmin, y, t)
-    # botnet_y = net_y(x, ymin, t)
-    # topnet_y = net_y(x, ymax, t)
-    etal, phil = leftnet[0], leftnet[2]
-    etar, mur, phir = rightnet[0], rightnet[1], rightnet[2]
-    # mul_x = leftnet_x[1]
-    # etabot_y, etatop_y = botnet_y[0], topnet_y[0]
-    # mubot_y, mutop_y = botnet_y[1], topnet_y[1]
-    # phibot_y, phitop_y = botnet_y[2], topnet_y[2]
+    @partial(jax.jit, static_argnums=(0,))
+    def residuals_and_weights(self, params, tol):
+        r_pred = self.res_func(params, self.tr, self.xr, self.yr)
+        L_t = jnp.mean(r_pred ** 2, axis=1)
+        W = jax.lax.stop_gradient(jnp.exp(- tol * (self.Mt @ L_t)))
+        return L_t, W
 
-    eta_res = (etal - 1) + (etar - 0)  # + (etabot_y - 0) + (etatop_y - 0)
-    mu_res = (mur - 0)  # + (mul_x - 0) + (mubot_y - 0) + (mutop_y - 0)
-    phi_res = (phil - phie) + (phir - 0)  # + (phibot_y - 0) + (phitop_y - 0)
+    @partial(jax.jit, static_argnums=(0,))
+    def loss_ic(self, params):
+        # Evaluate the network over IC
+        u_pred = self.ic_net(params, self.xic, self.yic)
+        eta, mu, phi = u_pred[:, :, 0], u_pred[:, :, 1], u_pred[:, :, 2]
+        eta_res = jnp.mean((self.u0[0] - eta) ** 2)
+        mu_res = jnp.mean((self.u0[1] - mu) ** 2)
+        phi_res = jnp.mean((self.u0[2] - phi) ** 2)
+        loss_ic = abs(eta_res) + abs(mu_res) + abs(phi_res)
+        return loss_ic
 
-    return abs(eta_res) + abs(mu_res) + abs(phi_res)
+    @partial(jax.jit, static_argnums=(0,))
+    def loss_res(self, params):
+        r_pred = self.res_func(params, self.tr, self.xr, self.yr)
+        # Compute loss
+        loss_r = jnp.mean(r_pred ** 2)
+        return loss_r
 
+    @partial(jax.jit, static_argnums=(0,))
+    def loss_bc(self, params):
+        u_left = self.u_func(params, self.tbc, jnp.zeros_like(self.ybc), self.ybc)
+        u_right = self.u_func(params, self.tbc, self.xmax * jnp.ones_like(self.ybc), self.ybc)
+        uy_top = self.uy_func(params, self.tbc, self.xbc, self.ymax * jnp.ones_like(self.xbc))
+        uy_bot = self.uy_func(params, self.tbc, self.xbc, jnp.zeros_like(self.xbc))
 
-@eqx.filter_jit
-def bc_loss(net, x, y, t):
-    f = jax.vmap(jax.vmap(bc_res, in_axes=(None, 0, 0, None)), in_axes=(None, None, None, 0))
-    return jnp.mean(jnp.square(f(net, x, y, t)))
+        eta_l, phi_l = u_left[:, :, 0], u_left[:, :, 2]
+        eta_r, mu_r, phi_r = u_right[:, :, 0], u_right[:, :, 1], u_right[:, :, 2]
+        eta_top, mu_top, phi_top = uy_top[:, :, 0], uy_top[:, :, 1], uy_top[:, :, 2]
+        eta_bot, mu_bot, phi_bot = uy_bot[:, :, 0], uy_bot[:, :, 1], uy_bot[:, :, 2]
 
+        eta_res = jnp.mean(((eta_l - jnp.ones_like(eta_l)) + (eta_r - jnp.zeros_like(eta_r)) +
+                            (eta_top - jnp.zeros_like(eta_top)) + (eta_bot - jnp.zeros_like(eta_bot))) ** 2)
 
-#@eqx.filter_jit
-def loss(net, key):
-    key, key1, key2 = jr.split(key, 3)
-    # key, key1, key2, key3, key4, key5, key6 = jr.split(key, 7)
-    batchsize = 8192
-    xc2 = jr.uniform(key1, minval=xmin, maxval=xmax, shape=(batchsize,))
-    yc2 = jr.uniform(key2, minval=ymin, maxval=ymax, shape=(batchsize,))
-    plt.scatter(xc2, yc2, s=5)
-    plt.show()
-    loss_ic = ic_loss(net, xic, yic)
-    loss_bc = bc_loss(net, xbc, ybc, tbc)
-    Lt, W = res_weights(net, xc2, yc2, tc)
-    loss = jnp.mean(W * Lt) + icWeight * loss_ic + bcWeight * loss_bc
-    return loss
+        mu_res = jnp.mean(((mu_r - jnp.zeros_like(mu_r)) + (mu_top - jnp.zeros_like(mu_top))
+                           + (mu_bot - jnp.zeros_like(mu_bot))) ** 2)
+        phi_res = jnp.mean(((phi_l - phie * jnp.ones_like(phi_l)) + (phi_r - jnp.zeros_like(phi_r)) +
+                            (phi_top - jnp.zeros_like(phi_top)) + (phi_bot - jnp.zeros_like(phi_bot))) ** 2)
+
+        loss_bc = abs(eta_res) + abs(mu_res) + abs(phi_res)
+        return loss_bc
+
+    @partial(jax.jit, static_argnums=(0,))
+    def loss(self, params):
+        Lic = icWeight * self.loss_ic(params)
+        Lbc = bcWeight * self.loss_bc(params)
+        L_t, W = self.residuals_and_weights(params, self.tol)
+        loss = jnp.mean(W * L_t) + Lic + Lbc
+        return loss
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, i, opt_state):
+        params = self.get_params(opt_state)
+        grad = jax.grad(self.loss)(params)
+        print(grad)
+        return self.opt_update(i, grad, opt_state)
+
+    def train(self, nIter):
+        pbar = trange(nIter, miniters=int(nIter / 1000))
+        # Main training loop
+        for it in pbar:
+            self.key, _ = jr.split(self.key)
+            self.key2, _ = jr.split(self.key2)
+            self.xr = jr.uniform(self.key, minval=0, maxval=1, shape=(self.n_x,))
+            self.yr = jr.uniform(self.key2, minval=0, maxval=1, shape=(self.n_y,))
+            self.current_count = next(self.itercount)
+            self.opt_state = self.step(self.current_count, self.opt_state)
+            if it % 1000 == 0:
+                params = self.get_params(self.opt_state)
+                
+                Lt, W = self.residuals_and_weights(params, self.tol)
+                loss_value = self.loss(params)
+                loss_ics_value = self.loss_ic(params)
+                loss_res_value = jnp.mean(Lt*W) #self.loss_res(params)
+                loss_bc_value = self.loss_bc(params)
+
+                self.loss_log.append(loss_value)
+                self.loss_ics_log.append(loss_ics_value)
+                self.loss_res_log.append(loss_res_value)
+                self.loss_bcs_log.append(loss_bc_value)
+
+                pbar.set_postfix({'Loss': loss_value, 'loss_res': loss_res_value,
+                                  'loss_ics': loss_ics_value, 'loss_bcs': loss_bc_value})
