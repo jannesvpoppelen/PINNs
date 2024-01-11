@@ -7,6 +7,8 @@ As of now (14-11-2023), the repository contains the following files
 - `pdefuncs.py` - Functions appearing in the system of PDEs of the phase-field model.
 - `pinnfuncs.py` - Residual and loss functions for the PINN. 
 - `PF-Li.py` - PINN formulation of a phase-field model for dendrite formation on lithium electrodes.
+- `AC2D.py` - PINN formulation of the 2D Allen-Cahn equation, which models spinodal decomposition.
+- `solid.py` - PINN formulation of dendritic solidification through supercooling.
 - <del> `AC.py` - My implementation of the 2D Allen-Cahn equation, trying to recreate the results from the bc-PINN paper [2]. </del>  Removed 06-10-2023
 -  <del> `ACJAX.py` - Not fully correct implementation of the 2D Allen-Cahn equation using JAX. (OUTDATED) </del> Removed 06-10-2023
 -  <del> `heateq.py` - Working implementation of the heat equation using JAX. </del> Removed 06-10-2023
