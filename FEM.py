@@ -19,7 +19,7 @@ tau = Constant(0.0003)
 kappa = Constant(1.8)
 alpha = Constant(0.9)
 Teq = Constant(1.0)
-epsilon = constant(0.01)
+epsilon = Constant(0.01)
 j = Constant(6.0)
 delta = Constant(0.02)
 mu = Constant(1.0)
@@ -30,7 +30,7 @@ k = Constant(dt)
 # Class representing the intial conditions
 class InitialConditions (UserExpression):
     def eval (self, values, x):
-        values [0] = 1.* ((x[0]-5) ** 2 +(x[1] - 5) ** 2 - 1)
+        values [0] = 1.*((x[0]-5)**2 + (x[1]-5)**2 <= 1)
         values [1] = 0.
     def value_shape (self):
         return (2,)
@@ -38,7 +38,7 @@ class InitialConditions (UserExpression):
         
         
 # Create mesh and define function space
-mesh = RectangleMesh(Point(0,0), Point(10, 10), 50, 50)
+mesh = RectangleMesh(Point(0,0), Point(10, 10), 250, 250)
 P1 = FiniteElement ("Lagrange", mesh.ufl_cell(), 1 )
 TH = P1*P1
 W = FunctionSpace(mesh, TH) #Space for u,v
@@ -55,18 +55,17 @@ u_n = interpolate(indata, W)
 
 
 # Define variational problem
-u = TrialFunction(W)
+u = Function(W)
 u_1, u_2 =u[0], u[1]
 u_n1, u_n2 =u_n[0], u_n[1]
 
 
-F = tau * ((u_1 - u_n1) / k ) * v_1 * dx + ((u_2 - u_n2) / k) * v_2 * dx - kappa*((u_1 - u_n1)/k) * u_2 * dx \
- + epsilon ** 2 * dot(v_1, grad(u_1)) * dx + dot(v_2, grad(u_2)) * dx + u_1*(1-u_1)*(u_1 - 0.5 * alpha/Pi * atan(gamma*(Teq-u_2)) * dx
+F = tau * ((u_1 - u_n1) / k ) * v_1 * dx + ((u_2 - u_n2) / k) * v_2 * dx - kappa*((u_1 - u_n1)/k) * u_2 * v_2 * dx \
+ + epsilon ** 2 * inner(grad(v_1), grad(u_1)) * dx + inner(grad(v_2), grad(u_2)) * dx + u_1*(1-u_1)*(u_1 - 0.5 * alpha/Pi * atan(gamma*(Teq-u_2))) * v_1 * dx
 
+solve(F == 0, u, solver_parameters={"newton_solver":
+                                        {"relative_tolerance": 1e-3}})
 
-
-a,L=lhs(F),rhs(F)
-u=Function(W)
 
 
 #Initial population profiles
@@ -85,7 +84,7 @@ c=plot(u_n2)
 plt.colorbar(c)
 plt.xlabel("x")
 plt.ylabel("y")
-plt.title("v")
+plt.title("T")
 plt.savefig("T_0.png")
 plt.clf()
 
@@ -97,7 +96,7 @@ while t < T:
     t+=dt
     print("t="+str(t))
     tlist.append(t)
-    solve(a==L,u)
+    solve(F == 0, u, solver_parameters={"newton_solver":{"relative_tolerance": 1e-3, 'maximum_iterations':1e4}})
     u_n.assign(u)
     
     
